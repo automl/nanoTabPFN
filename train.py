@@ -27,8 +27,6 @@ def get_default_device():
     return device
 
 datasets = []
-datasets.append(train_test_split(*load_iris(return_X_y=True), test_size=0.5, random_state=0))
-datasets.append(train_test_split(*load_wine(return_X_y=True), test_size=0.5, random_state=0))
 datasets.append(train_test_split(*load_breast_cancer(return_X_y=True), test_size=0.5, random_state=0))
 
 def eval(classifier):
@@ -43,9 +41,9 @@ def eval(classifier):
          pred = prob.argmax(axis=1) # avoid a second forward pass by not calling predict
          if prob.shape[1]==2:
              prob = prob[:,:1]
-         scores["roc_auc"] += roc_auc_score(y_test, prob, multi_class="ovr")
-         scores["acc"] += accuracy_score(y_test, pred)
-         scores["balanced_acc"] += balanced_accuracy_score(y_test, pred)
+         scores["roc_auc"] += float(roc_auc_score(y_test, prob, multi_class="ovr"))
+         scores["acc"] += float(accuracy_score(y_test, pred))
+         scores["balanced_acc"] += float(balanced_accuracy_score(y_test, pred))
     scores = {k:v/len(datasets) for k,v in scores.items()}
     return scores
 
