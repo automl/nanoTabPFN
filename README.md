@@ -86,3 +86,9 @@ print('ROC AUC', roc_auc_score(y_test, prob))
 print('Accuracy', accuracy_score(y_test, pred))
 ```
 
+### TFM-Playground
+
+The nanoTabPFN repository is supposed to stay ultra small and simple, but we created another repository,
+the [TFM-Playground](https://github.com/automl/TFM-Playground/) which we are building out to have a lot more features,
+like regression, multiple prior interfaces, multiple architectures, ensembling of different pre-processings and more,
+so check it out if you are interested!
