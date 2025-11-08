@@ -92,3 +92,14 @@ The nanoTabPFN repository is supposed to stay ultra small and simple, but we cre
 the [TFM-Playground](https://github.com/automl/TFM-Playground/) which we are building out to have a lot more features,
 like regression, multiple prior interfaces, multiple architectures, ensembling of different pre-processings and more,
 so check it out if you are interested!
+
+### BibTex Citation
+
+```
+@article{pfefferle2025nanotabpfn,
+  title={nanoTabPFN: A Lightweight and Educational Reimplementation of TabPFN},
+  author={Pfefferle, Alexander and Hog, Johannes and Purucker, Lennart and Hutter, Frank},
+  journal={arXiv preprint arXiv:2511.03634},
+  year={2025}
+}
+```
