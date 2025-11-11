@@ -11,6 +11,7 @@ from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_auc_sco
 from sklearn.model_selection import train_test_split
 from torch import nn
 from torch.utils.data import DataLoader
+from diagnostics import DormantNeuronMonitor, FeatureEmbeddingTap, effective_rank_from_embeddings, flatten_grads
 
 
 def set_randomness_seed(seed):
@@ -48,23 +49,16 @@ def eval(classifier):
     return scores
 
 def train(model: NanoTabPFNModel, prior: DataLoader,
-          lr: float = 1e-4, device: torch.device = None, steps_per_eval=10, eval_func=None):
+          lr: float = 1e-4, device: torch.device = None,
+          steps_per_eval: int = 10, eval_func=None,
+          # diagnostics controls:
+          diag_every: int = 50,         # print diagnostics every N steps (set 0/None to disable)
+          dnr_threshold: float = 1e-3,  # dormant-neuron threshold on post-GELU activations
+          aux_lambda: float = 1e-2      # if your model returns (logits, aux)
+          ):
     """
-    Trains our model on the given prior using the given criterion.
-
-    Args:
-        model: (NanoTabPFNModel) our PyTorch model
-        prior: (DataLoader) torch-compatible dataloader
-        lr: (float) learning rate
-        device: (torch.device) the device we are using
-        steps_per_eval: (int) how many steps we wait before running evaluation again
-        eval_func: a function that takes in a classifier and returns a dict containing the average scores
-                   for some metrics and datasets
-
-    Returns:
-        (model) our trained numpy model
-        (list) a list containing our eval history, each entry is the real time used for training so far together
-               with a dict mapping metric names to their average values accross a list of datasets
+    Trains our model on the given prior using CE + (aux_lambda * aux loss, if provided),
+    and prints diagnostics (Dormant Neuron Ratio, Effective Rank, Gradient Conflict).
     """
     if not device:
         device = get_default_device()
@@ -75,35 +69,71 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
     model.train()
     optimizer.train()
 
-    train_time = 0
-    eval_history=[]
+    # linear1 modules from each TransformerEncoderLayer (for dormant-neuron monitor)
+    linear1_modules = [blk.linear1 for blk in model.transformer_blocks
+                       if hasattr(blk, "linear1") and blk.linear1 is not None]
+    dnr = DormantNeuronMonitor(linear1_modules, threshold=dnr_threshold)
+    # tap feature encoder outputs to compute effective rank
+    feat_tap = FeatureEmbeddingTap(model.feature_encoder.linear_layer)
+    # track gradient conflict (cosine with previous batch grads)
+    prev_grad = None
+
+    train_time = 0.0
+    eval_history = []
+
     try:
         for step, full_data in enumerate(prior):
             step_start_time = time.time()
             train_test_split_index = full_data["train_test_split_index"]
-            #if (torch.isnan(data[0]).any() or torch.isnan(data[1]).any()):
-            #    continue
+
             data = (full_data["x"].to(device),
                     full_data["y"][:, :train_test_split_index].to(device))
             targets = full_data["y"].to(device)
 
-            output = model(data, train_test_split_index=train_test_split_index)
-            targets = targets[:, train_test_split_index:]
+            # forward (be tolerant: model may return logits or (logits, aux))
+            out = model(data, train_test_split_index=train_test_split_index)
+            if isinstance(out, tuple):
+                output, aux_total = out
+            else:
+                output, aux_total = out, torch.tensor(0.0, device=device)
 
+            # targets for CE
+            targets = targets[:, train_test_split_index:]
             targets = targets.reshape((-1,)).to(torch.long)
             output = output.view(-1, output.shape[-1])
 
-            loss = criterion(output, targets).mean()
-            loss.backward()
-            total_loss = loss.cpu().detach().item()
+            ce_loss = criterion(output, targets).mean()
+            loss = ce_loss + aux_lambda * aux_total
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
+            # backward
+            loss.backward()
+
+            # gradient conflict (cosine with previous batch)
+            cur_grad = flatten_grads(model)
+            grad_cos = None
+            if prev_grad is not None and cur_grad is not None:
+                grad_cos = float(torch.dot(prev_grad, cur_grad).item())
+            prev_grad = cur_grad.clone() if cur_grad is not None else None
+
+            # step
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             optimizer.zero_grad()
-            step_train_duration = time.time() - step_start_time
-            train_time += step_train_duration
 
-            # evaluate
+            # time accounting
+            train_time += (time.time() - step_start_time)
+
+            # ---- diagnostics printout every diag_every steps ----
+            if diag_every and (step % diag_every == diag_every - 1):
+                dnr_ratios = dnr.dormant_ratios()  # {layer_idx: ratio}
+                eff_rank = effective_rank_from_embeddings(feat_tap.last)
+                dnr_str = " | ".join([f"L{li}: {r:.2f}" for li, r in sorted(dnr_ratios.items())]) if dnr_ratios else "n/a"
+                print(f"[diag] step {step+1} | time {train_time:6.1f}s | loss {float(loss.detach().cpu()):.4f} "
+                      f"| DNR {dnr_str} | EffRank {eff_rank if eff_rank is not None else 'n/a'}"
+                      f"{f' | GradCosPrev {grad_cos:.4f}' if grad_cos is not None else ''}")
+                dnr.reset()  # reset max activations window
+
+            # ---- evaluation (unchanged) ----
             if step % steps_per_eval == steps_per_eval-1 and eval_func is not None:
                 model.eval()
                 optimizer.eval()
@@ -111,15 +141,19 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
                 classifier = NanoTabPFNClassifier(model, device)
                 scores = eval_func(classifier)
                 eval_history.append((train_time, scores))
-                score_str = " | ".join([f"{k} {v:7.4f}" for k,v in scores.items()])
-                print(f"time {train_time:7.1f}s | loss {total_loss:7.4f} | {score_str}")
+                score_str = " | ".join([f"{k} {v:7.4f}" for k, v in scores.items()])
+                print(f"time {train_time:7.1f}s | loss {float(loss.detach().cpu()):7.4f} | {score_str}")
 
                 model.train()
                 optimizer.train()
             elif step % steps_per_eval == steps_per_eval-1 and eval_func is None:
-                print(f"time {train_time:7.1f}s | loss {total_loss:7.4f}")
+                print(f"time {train_time:7.1f}s | loss {float(loss.detach().cpu()):7.4f}")
+
     except KeyboardInterrupt:
         pass
+    finally:
+        dnr.close()
+        feat_tap.close()
 
     return model, eval_history
 
