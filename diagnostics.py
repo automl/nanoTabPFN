@@ -48,31 +48,36 @@ class FeatureEmbeddingTap:
         if self.handle: self.handle.remove(); self.handle = None
 
 
-def effective_rank_from_embeddings(emb_tensor, max_tokens=50000, eps=1e-12):
+def effective_rank_from_embeddings(X: torch.Tensor, eps: float = 1e-12):
     """
-    Entropy-based effective rank: exp( -sum_i p_i log p_i ) with p_i = s_i^2 / sum s_i^2
-    where s_i are singular values of centered embeddings.
-    emb_tensor: (B, R, C-1, E)
+    Compute effective rank of an embedding matrix X.
+
+    Returns:
+        float rank, or None if X is None, ill-conditioned, or contains non-finite values.
     """
-    if emb_tensor is None:
+    if X is None:
         return None
-    X = emb_tensor.reshape(-1, emb_tensor.shape[-1])  # [T, E]
-    if X.shape[0] > max_tokens:
-        idx = torch.randperm(X.shape[0], device=X.device)[:max_tokens]
-        X = X.index_select(0, idx)
-    X = X - X.mean(dim=0, keepdim=True)
-    # compute SVD (on CPU if memory tight)
-    use_cpu = X.device.type == "cuda"
-    if use_cpu:
-        Xc = X.float().cpu()
+
+
+    X = X.detach().float().cpu()
+
+    if not torch.isfinite(X).all():
+        return None
+
+    Xc = X - X.mean(dim=0, keepdim=True)
+
+    try:
         S = torch.linalg.svdvals(Xc)
-    else:
-        S = torch.linalg.svdvals(X.float())
-    s2 = S**2
-    p = s2 / (s2.sum() + eps)
-    H = -(p * (p + eps).log()).sum()
-    eff_rank = torch.exp(H).item()
-    return eff_rank
+    except Exception:
+        return None
+
+    S = S[S > eps]
+    if S.numel() == 0:
+        return None
+
+    p = S / S.sum()
+    H = -(p * p.log()).sum()
+    return float(torch.exp(H).item())
 
 def flatten_grads(model, eps=1e-12):
     g = []

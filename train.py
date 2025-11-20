@@ -74,7 +74,6 @@ def train(
     device: torch.device = None,
     steps_per_eval: int = 10,
     eval_func=None,
-    # diagnostics controls:
     diag_every: int = 50,  # print/log diagnostics every N steps (set 0/None to disable)
     dnr_threshold: float = 5e-2,  # dormant-neuron threshold on post-GELU activations
     aux_lambda: float = 1e-2,  # if your model returns (logits, aux)
