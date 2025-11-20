@@ -1,5 +1,8 @@
 __pycache__/
 *.pth
 *.h5
+300k_150x5_2.h5
+.idea/
+nanotabpfn/
 .idea/
 nanotabpfn/
