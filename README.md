@@ -7,10 +7,10 @@ The purpose of this repository is to be a good starting point for students and r
 ## Installation
 
 1. Clone the repository.
-2. Install the dependencies using the provided `requirements.txt` file:
+2. Install the dependencies via:
 
 ```bash
-pip install -r requirements.txt
+pip install numpy torch schedulefree h5py scikit-learn openml seaborn matplotlib
 ```
 
 **Note:** It is recommended to install PyTorch separately to ensure you get the correct version for your CUDA setup (if applicable). Visit [pytorch.org](https://pytorch.org/) for instructions.

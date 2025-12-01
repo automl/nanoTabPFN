@@ -1,6 +1,0 @@
-numpy
-torch
-h5py
-schedulefree
-scikit-learn
-matplotlib
