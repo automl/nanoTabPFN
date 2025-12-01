@@ -355,7 +355,7 @@ class LightningIndexer(nn.Module):
             all_top_indices.append(indices)
             
         if return_scores:
-            return torch.cat(all_reduced_scores, dim=1)
+            return torch.cat(all_reduced_scores, dim=1), torch.cat(all_top_indices, dim=1)
             
         return torch.cat(all_top_indices, dim=1)
 
@@ -493,7 +493,29 @@ class DSATabularLayer(nn.Module):
             train_out, dense_attn = self.row_attn(x_train, x_train, indices=None, return_attention=True)
             test_out, _ = self.row_attn(x_test, x_train, indices=None)
             
-            indexer_scores = self.indexer(x_train, x_train, top_k=self.top_k, return_scores=True)
+            indexer_scores, _ = self.indexer(x_train, x_train, top_k=self.top_k, return_scores=True)
+            
+            aux_data['dense_scores'] = dense_attn
+            aux_data['indexer_scores'] = indexer_scores
+            
+        elif mode == 'joint_train':
+            # JOINT TRAINING: Detached Auxiliary Loss Strategy
+            # 1. Detach input for Indexer to prevent gradients from TFM loss flowing to Indexer
+            x_train_detached = x_train.detach()
+            
+            # 2. Indexer Forward (Student) - Returns both scores (for loss) and indices (for TFM)
+            indexer_scores, train_indices = self.indexer(x_train_detached, x_train_detached, top_k=self.top_k, return_scores=True)
+            
+            # 3. Dense Attention (Teacher) - Computed on original graph for distillation target
+            _, dense_attn = self.row_attn(x_train, x_train, indices=None, return_attention=True)
+            
+            # 4. Sparse Attention (TFM) - Uses indices from detached indexer
+            train_out, _ = self.row_attn(x_train, x_train, indices=train_indices)
+            
+            # Test part (standard sparse)
+            k_test = min(self.top_k, x_train.shape[1])
+            test_indices = self.indexer(x_test, x_train, top_k=k_test)
+            test_out, _ = self.row_attn(x_test, x_train, indices=test_indices)
             
             aux_data['dense_scores'] = dense_attn
             aux_data['indexer_scores'] = indexer_scores
