@@ -13,7 +13,7 @@ pip install numpy torch schedulefree h5py scikit-learn openml seaborn
 
 - `model.py` contains the implementation of the architecture and a sklearn-like interface in less than 200 lines of code. 
 - `train.py` implements a simple training loop and prior dump data loader in under 200 lines
-- `experiment.ipynb` will recreate the experiment from the paper
+- `experiment.ipynb` will recreate the experiment from the [paper](https://arxiv.org/pdf/2511.03634) (requires `pip install tabpfn==2.2.1`)
 
 
 ### Pretrain your own nanoTabPFN
@@ -93,7 +93,10 @@ the [TFM-Playground](https://github.com/automl/TFM-Playground/) which we are bui
 like regression, multiple prior interfaces, multiple architectures, ensembling of different pre-processings and more,
 so check it out if you are interested!
 
-### BibTex Citation
+### Paper
+
+Check out our [paper](https://arxiv.org/pdf/2511.03634).
+Please use the following BibTex to cite:
 
 ```
 @article{pfefferle2025nanotabpfn,
