@@ -382,10 +382,6 @@ def train_sparse_finetune(
 
                 print(f"Time {train_time:7.1f}s | Train Loss {loss.item():.4f} | Syn Val Loss {val_loss:.4f} | Syn Acc {val_acc:.4f}")
 
-                if val_acc > best_syn_acc:
-                    best_syn_acc = val_acc
-                    best_model_state = copy.deepcopy(model.state_dict())
-
                 if logger:
                     logger.log({
                         'stage': 'sparse_finetune',
@@ -399,9 +395,6 @@ def train_sparse_finetune(
             
             model.train()
             optimizer.train()
-
-    print(f"Restoring best model with Synthetic Acc: {best_syn_acc:.4f}")
-    model.load_state_dict(best_model_state)
     
     # Final consistency set
     optimizer.eval() 
