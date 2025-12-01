@@ -1,38 +1,42 @@
+import argparse
+import copy
+import csv
+import os
 import random
 import time
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import h5py
 import numpy as np
 import schedulefree
 import torch
-from model import NanoTabPFNClassifier, NanoTabPFNModel, NanoTabPFNDSAModel
-import argparse
-import csv
-import os
-
-from sklearn.datasets import *
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_auc_score
-from sklearn.model_selection import train_test_split
 from torch import nn
 from torch.utils.data import DataLoader
-import copy 
+from sklearn.datasets import load_breast_cancer
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, roc_auc_score
+from sklearn.model_selection import train_test_split
 
+from model import NanoTabPFNClassifier, NanoTabPFNModel, NanoTabPFNDSAModel
 
-def set_randomness_seed(seed):
+def set_randomness_seed(seed: int):
+    """Sets the randomness seed for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
 
 set_randomness_seed(0)
 
-def get_default_device():
-    device = "cpu"
-    if torch.backends.mps.is_available(): device = "mps"
-    if torch.cuda.is_available(): device = "cuda"
-    return device
+def get_default_device() -> torch.device:
+    """Returns the best available device (CUDA, MPS, or CPU)."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 class CSVLogger:
-    def __init__(self, filename, fieldnames):
+    """Simple CSV Logger for tracking training metrics."""
+    def __init__(self, filename: str, fieldnames: List[str]):
         self.filename = filename
         self.fieldnames = fieldnames
         if not os.path.isfile(filename):
@@ -40,36 +44,86 @@ class CSVLogger:
                 writer = csv.DictWriter(f, fieldnames=self.fieldnames)
                 writer.writeheader()
 
-    def log(self, row):
+    def log(self, row: Dict[str, Any]):
+        """Logs a row of data to the CSV file."""
         with open(self.filename, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writerow(row)
 
-datasets = []
-datasets.append(train_test_split(*load_breast_cancer(return_X_y=True), test_size=0.5, random_state=0))
+def get_benchmark_datasets() -> List[Tuple]:
+    """Loads and returns benchmark datasets for evaluation."""
+    datasets = []
+    # Breast Cancer Dataset
+    X, y = load_breast_cancer(return_X_y=True)
+    datasets.append(train_test_split(X, y, test_size=0.5, random_state=0))
+    return datasets
 
-def eval(classifier):
+def evaluate_model(classifier: Any, datasets: Optional[List[Tuple]] = None) -> Dict[str, float]:
+    """
+    Evaluates the classifier on a list of datasets.
+
+    Args:
+        classifier: The trained classifier (sklearn-compatible).
+        datasets: List of (X_train, X_test, y_train, y_test) tuples.
+
+    Returns:
+        Dictionary of averaged scores (ROC AUC, Accuracy, Balanced Accuracy).
+    """
+    if datasets is None:
+        datasets = get_benchmark_datasets()
+
     scores = {
-        "roc_auc": 0,
-        "acc": 0,
-        "balanced_acc": 0
+        "roc_auc": 0.0,
+        "acc": 0.0,
+        "balanced_acc": 0.0
     }
-    for  X_train, X_test, y_train, y_test in datasets:
-         classifier.fit(X_train, y_train)
-         prob = classifier.predict_proba(X_test)
-         pred = prob.argmax(axis=1) # avoid a second forward pass by not calling predict
-         if prob.shape[1]==2:
-             prob = prob[:,1]
-         scores["roc_auc"] += float(roc_auc_score(y_test, prob, multi_class="ovr"))
-         scores["acc"] += float(accuracy_score(y_test, pred))
-         scores["balanced_acc"] += float(balanced_accuracy_score(y_test, pred))
-    scores = {k:v/len(datasets) for k,v in scores.items()}
+    
+    for X_train, X_test, y_train, y_test in datasets:
+        classifier.fit(X_train, y_train)
+        prob = classifier.predict_proba(X_test)
+        pred = prob.argmax(axis=1) 
+        
+        # Handle binary classification for ROC AUC
+        if prob.shape[1] == 2:
+            prob_score = prob[:, 1]
+        else:
+            prob_score = prob
+
+        scores["roc_auc"] += float(roc_auc_score(y_test, prob_score, multi_class="ovr"))
+        scores["acc"] += float(accuracy_score(y_test, pred))
+        scores["balanced_acc"] += float(balanced_accuracy_score(y_test, pred))
+
+    # Average scores
+    num_datasets = len(datasets)
+    scores = {k: v / num_datasets for k, v in scores.items()}
     return scores
 
-def train(model: NanoTabPFNModel, prior: DataLoader,
-          lr: float = 1e-4, device: torch.device = None, steps_per_eval=10, eval_func=None, max_time=None, logger=None):
+def train_base_model(
+    model: NanoTabPFNModel, 
+    prior: DataLoader,
+    lr: float = 1e-4, 
+    device: torch.device = None, 
+    steps_per_eval: int = 10, 
+    max_time: float = None, 
+    logger: Optional[CSVLogger] = None
+) -> Tuple[NanoTabPFNModel, List]:
+    """
+    Trains the base NanoTabPFN model using ScheduleFree optimization.
+
+    Args:
+        model: The NanoTabPFN model to train.
+        prior: DataLoader providing synthetic prior data.
+        lr: Learning rate.
+        device: Torch device.
+        steps_per_eval: Number of steps between internal evaluations.
+        max_time: Maximum training time in seconds.
+        logger: Optional CSVLogger for tracking metrics.
+
+    Returns:
+        Tuple of (trained_model, eval_history).
+    """
     if not device:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = get_default_device()
     model.to(device)
     
     # ScheduleFree Optimizer
@@ -79,7 +133,7 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
     model.train()
     optimizer.train()
 
-    train_time = 0
+    train_time = 0.0
     eval_history = []
     
     print(f"Starting Base Training for {max_time if max_time else 'Infinite'}s...")
@@ -125,7 +179,7 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
             train_time += step_train_duration
 
             # --- 3. Internal Evaluation Step ---
-            if step % steps_per_eval == steps_per_eval-1:
+            if step % steps_per_eval == steps_per_eval - 1:
                 
                 # Switch to Eval Mode (Activates Consensus Weights)
                 optimizer.eval()
@@ -162,17 +216,36 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
                 optimizer.train()
 
     except KeyboardInterrupt:
+        print("Training interrupted by user.")
         pass
 
     return model, eval_history
 
-def train_indexer_warmup(model: NanoTabPFNDSAModel, prior: DataLoader, device: torch.device, max_time: float, lr: float = 1e-4, logger=None):
+def train_indexer_warmup(
+    model: NanoTabPFNDSAModel, 
+    prior: DataLoader, 
+    device: torch.device, 
+    max_time: float, 
+    lr: float = 1e-4, 
+    logger: Optional[CSVLogger] = None
+):
+    """
+    Warms up the indexer using distillation from the dense attention teacher.
+
+    Args:
+        model: The NanoTabPFNDSAModel.
+        prior: DataLoader.
+        device: Torch device.
+        max_time: Max warmup time in seconds.
+        lr: Learning rate.
+        logger: Optional CSVLogger.
+    """
     print(f"Starting Indexer Warmup for {max_time:.1f}s...")
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=lr, weight_decay=0.0)
     model.train()
     optimizer.train()
     
-    train_time = 0
+    train_time = 0.0
     
     for step, full_data in enumerate(prior):
         if train_time > max_time:
@@ -190,7 +263,7 @@ def train_indexer_warmup(model: NanoTabPFNDSAModel, prior: DataLoader, device: t
         loss = torch.tensor(0.0, device=device)
         for aux in aux_data_list:
             if 'indexer_scores' in aux and 'dense_scores' in aux:
-                # --- FIX: ROBUST DISTILLATION (KL DIVERGENCE) ---
+                # --- ROBUST DISTILLATION (KL DIVERGENCE) ---
                 # 1. Teacher (Dense): Softmax to get probabilities
                 dense_logits = aux['dense_scores'].mean(dim=1) # Average heads
                 target_probs = torch.nn.functional.softmax(dense_logits, dim=-1)
@@ -200,7 +273,6 @@ def train_indexer_warmup(model: NanoTabPFNDSAModel, prior: DataLoader, device: t
                 
                 # 3. KL Divergence
                 loss += torch.nn.functional.kl_div(indexer_log_probs, target_probs, reduction='batchmean')
-                # ------------------------------------------------
         
         if torch.isnan(loss) or torch.isinf(loss):
             print(f"Warning: Warmup Loss is {loss.item()} at step {step}. Skipping.")
@@ -223,7 +295,30 @@ def train_indexer_warmup(model: NanoTabPFNDSAModel, prior: DataLoader, device: t
                     'syn_acc': 0, 'acc': 0, 'roc_auc': 0, 'balanced_acc': 0 
                 })
 
-def train_sparse_finetune(model: NanoTabPFNDSAModel, prior: DataLoader, device: torch.device, max_time: float, lr: float = 1e-4, steps_per_eval=10, eval_func=None, logger=None):
+def train_sparse_finetune(
+    model: NanoTabPFNDSAModel, 
+    prior: DataLoader, 
+    device: torch.device, 
+    max_time: float, 
+    lr: float = 1e-4, 
+    steps_per_eval: int = 30, 
+    logger: Optional[CSVLogger] = None
+) -> Tuple[NanoTabPFNDSAModel, List]:
+    """
+    Finetunes the model using sparse attention.
+
+    Args:
+        model: The NanoTabPFNDSAModel.
+        prior: DataLoader.
+        device: Torch device.
+        max_time: Max finetuning time in seconds.
+        lr: Learning rate.
+        steps_per_eval: Steps between evaluations.
+        logger: Optional CSVLogger.
+
+    Returns:
+        Tuple of (trained_model, eval_history).
+    """
     print(f"Starting Sparse Finetune for {max_time:.1f}s...")
     
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=lr, weight_decay=0.0)
@@ -232,8 +327,7 @@ def train_sparse_finetune(model: NanoTabPFNDSAModel, prior: DataLoader, device: 
     model.train()
     optimizer.train()
     
-    start_time = time.time()
-    train_time = 0
+    train_time = 0.0
     eval_history = []
 
     best_syn_acc = 0.0
@@ -270,7 +364,7 @@ def train_sparse_finetune(model: NanoTabPFNDSAModel, prior: DataLoader, device: 
         train_time += time.time() - step_start  
         
         # Evaluation
-        if step % steps_per_eval == steps_per_eval-1:
+        if step % steps_per_eval == steps_per_eval - 1:
             
             optimizer.eval() 
             model.eval() 
@@ -317,7 +411,8 @@ def train_sparse_finetune(model: NanoTabPFNDSAModel, prior: DataLoader, device: 
 
 
 class PriorDumpDataLoader(DataLoader):
-    """DataLoader that loads synthetic prior data from an HDF5 dump.
+    """
+    DataLoader that loads synthetic prior data from an HDF5 dump.
 
     Args:
         filename (str): Path to the HDF5 file.
@@ -326,14 +421,16 @@ class PriorDumpDataLoader(DataLoader):
         device (torch.device): Device to load tensors onto.
     """
 
-    def __init__(self, filename, num_steps, batch_size, device=None):
+    def __init__(self, filename: str, num_steps: int, batch_size: int, device: torch.device = None):
         self.filename = filename
         self.num_steps = num_steps
         self.batch_size = batch_size
         self.device = device
         self.pointer = 0
         if device is None:
-            device = get_default_device()
+            self.device = get_default_device()
+        
+        # Open file to read metadata
         with h5py.File(self.filename, "r") as f:
             self.max_num_classes = f["max_num_classes"][0]
 
@@ -344,6 +441,7 @@ class PriorDumpDataLoader(DataLoader):
                 num_features = f["num_features"][self.pointer : end].max()
                 num_datapoints_batch = f["num_datapoints"][self.pointer:end]
                 max_seq_in_batch = int(num_datapoints_batch.max())
+                
                 x = torch.from_numpy(f["X"][self.pointer:end, :max_seq_in_batch, :num_features])
                 y = torch.from_numpy(f["y"][self.pointer:end, :max_seq_in_batch])
                 train_test_split_index = f["single_eval_pos"][self.pointer : end]
@@ -361,8 +459,9 @@ class PriorDumpDataLoader(DataLoader):
 
     def __len__(self):
         return self.num_steps
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Train NanoTabPFN models.")
     parser.add_argument("--model_type", type=str, choices=["base", "dsa", "both"], default="both", help="Type of model to train")
     parser.add_argument("--max_time", type=float, default=600.0, help="Maximum training time in seconds")
     args = parser.parse_args()
@@ -398,12 +497,11 @@ if __name__ == "__main__":
             
             # The 'train' function now handles max_time and internal synthetic eval
             # We use a higher LR (4e-3) for base training from scratch vs finetuning (1e-5)
-            model, history = train(
+            model, history = train_base_model(
                 model, 
                 prior, 
                 lr=4e-3, 
                 steps_per_eval=25, 
-                eval_func=eval, # Optional: Keep external eval for logging, but training relies on internal syn_acc
                 max_time=args.max_time, 
                 logger=logger
             )
@@ -439,13 +537,11 @@ if __name__ == "__main__":
                 prior, 
                 device, 
                 max_time=finetune_time, 
-                lr=1e-5, # Lower LR for stability
                 steps_per_eval=25, 
-                eval_func=eval, 
                 logger=logger
             )
 
         print(f"Final evaluation for {m_type}:")
         # Ensure we switch to eval mode one last time before final external check
         model.eval() 
-        print(eval(NanoTabPFNClassifier(model, device)))
+        print(evaluate_model(NanoTabPFNClassifier(model, device)))
