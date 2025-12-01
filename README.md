@@ -4,94 +4,76 @@ Train your own small TabPFN in less than 500 LOC and a few minutes.
 
 The purpose of this repository is to be a good starting point for students and researchers that are interested in learning about how TabPFN works under the hood.
 
-Clone the repository, afterwards install dependencies via:
-```
-pip install numpy torch schedulefree h5py scikit-learn openml seaborn
-```
+## Installation
 
-### Our Code
-
-- `model.py` contains the implementation of the architecture and a sklearn-like interface in less than 200 lines of code. 
-- `train.py` implements a simple training loop and prior dump data loader in under 200 lines
-- `experiment.ipynb` will recreate the experiment from the paper
-
-
-### Pretrain your own nanoTabPFN
-
-To pretrain your own nanoTabPFN, you need to first download a prior data dump from [here](http://ml.informatik.uni-freiburg.de/research-artifacts/nanoTabPFN/300k_150x5_2.h5), then run `train.py`.
+1. Clone the repository.
+2. Install the dependencies using the provided `requirements.txt` file:
 
 ```bash
-cd nanoTabPFN
+pip install -r requirements.txt
+```
 
-# download data dump
+**Note:** It is recommended to install PyTorch separately to ensure you get the correct version for your CUDA setup (if applicable). Visit [pytorch.org](https://pytorch.org/) for instructions.
+
+## Dataset
+
+The training script requires a prior data dump file named `300k_150x5_2.h5`.
+
+You can download it using `curl`:
+
+```bash
 curl http://ml.informatik.uni-freiburg.de/research-artifacts/nanoTabPFN/300k_150x5_2.h5 --output 300k_150x5_2.h5
+```
 
+## Usage
+
+### Training
+
+You can train the model using `train.py`. The script supports training the base NanoTabPFN model, the DSA (DeepSeek Sparse Attention) model, or both.
+
+**Command:**
+
+```bash
+python train.py [arguments]
+```
+
+**Arguments:**
+
+*   `--model_type`: The type of model to train. Choices are:
+    *   `base`: Train the standard NanoTabPFN model.
+    *   `dsa`: Train the NanoTabPFN model with DeepSeek Sparse Attention.
+    *   `both`: Train both models sequentially (default).
+*   `--max_time`: Maximum training time in seconds (default: 600.0).
+
+**Examples:**
+
+Train both models for 600 seconds (default):
+```bash
 python train.py
 ```
 
-#### Step by Step explanation:
-
-First we import our code from model.py and train.py
-```py
-from model import NanoTabPFNModel
-from model import NanoTabPFNClassifier
-from train import PriorDumpDataLoader
-from train import train, get_default_device
-```
-Then we instantiate our model
-```py
-model = NanoTabPFNModel(
-    embedding_size=96,
-    num_attention_heads=4,
-    mlp_hidden_size=192,
-    num_layers=3,
-    num_outputs=2
-)
-```
-and our dataloader
-```py
-prior = PriorDumpDataLoader(
-    "300k_150x5_2.h5",
-    num_steps=2500,
-    batch_size=32,
-)
-```
-Now we can train our model:
-```py
-device = get_default_device()
-model, _ = train(
-    model,
-    prior,
-    lr = 4e-3,
-    device = device
-)
-```
-and finally we can instantiate our classifier:
-```py
-clf = NanoTabPFNClassifier(model, device)
-```
-and use its `.fit`, `.predict` and `.predict_proba`:
-```py
-from sklearn.datasets import load_breast_cancer
-from sklearn.metrics import roc_auc_score, accuracy_score
-from sklearn.model_selection import train_test_split
-
-X, y = load_breast_cancer(return_X_y=True)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5)
-
-clf.fit(X_train, y_train)
-prob = clf.predict_proba(X_test)
-pred = clf.predict(X_test)
-print('ROC AUC', roc_auc_score(y_test, prob))
-print('Accuracy', accuracy_score(y_test, pred))
+Train only the DSA model for 300 seconds:
+```bash
+python train.py --model_type dsa --max_time 300
 ```
 
-### TFM-Playground
+### Benchmarking
 
-The nanoTabPFN repository is supposed to stay ultra small and simple, but we created another repository,
-the [TFM-Playground](https://github.com/automl/TFM-Playground/) which we are building out to have a lot more features,
-like regression, multiple prior interfaces, multiple architectures, ensembling of different pre-processings and more,
-so check it out if you are interested!
+To run the inference benchmark (comparing Dense vs DSA attention):
+
+```bash
+python run_benchmark_gpu.py
+```
+
+## Code Structure
+
+- `model.py`: Contains the implementation of the architecture (NanoTabPFN and NanoTabPFNDSA) and a sklearn-like interface.
+- `train.py`: Implements the training loop, prior dump data loader, and command-line interface.
+- `run_benchmark_gpu.py`: Script to benchmark inference latency and memory usage.
+- `experiment.ipynb`: Notebook to recreate the experiment from the paper.
+
+
+```
 
 ### BibTex Citation
 
