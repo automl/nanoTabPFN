@@ -1,3 +1,4 @@
+import os
 import random
 import time
 
@@ -48,7 +49,8 @@ def eval(classifier):
     return scores
 
 def train(model: NanoTabPFNModel, prior: DataLoader,
-          lr: float = 1e-4, device: torch.device = None, steps_per_eval=10, eval_func=None):
+          lr: float = 1e-4, device: torch.device = None, steps_per_eval=10, eval_func=None,
+          checkpoint_dir: str = None, num_checkpoints: int = 3, model_config: dict = None):
     """
     Trains our model on the given prior using the given criterion.
 
@@ -60,6 +62,9 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
         steps_per_eval: (int) how many steps we wait before running evaluation again
         eval_func: a function that takes in a classifier and returns a dict containing the average scores
                    for some metrics and datasets
+        checkpoint_dir: (str) directory to save intermediate checkpoints; None to disable
+        num_checkpoints: (int) number of evenly-spaced intermediate checkpoints to save
+        model_config: (dict) model config to include in checkpoint metadata
 
     Returns:
         (model) our trained numpy model
@@ -71,6 +76,14 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
     model.to(device)
     optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=lr, weight_decay=0.0)
     criterion = nn.CrossEntropyLoss()
+
+    # Set up intermediate checkpoint saving
+    total_steps = len(prior)
+    checkpoint_steps = set()
+    if checkpoint_dir and num_checkpoints > 0 and total_steps > 0:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        interval = total_steps // (num_checkpoints + 1)
+        checkpoint_steps = {interval * (i + 1) - 1 for i in range(num_checkpoints)}
 
     model.train()
     optimizer.train()
@@ -102,6 +115,15 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
             optimizer.zero_grad()
             step_train_duration = time.time() - step_start_time
             train_time += step_train_duration
+
+            # save intermediate checkpoint
+            if step in checkpoint_steps:
+                ckpt = {"model_state_dict": model.state_dict(), "step": step + 1}
+                if model_config:
+                    ckpt["model_config"] = model_config
+                ckpt_path = os.path.join(checkpoint_dir, f"checkpoint_step_{step + 1}.pt")
+                torch.save(ckpt, ckpt_path)
+                print(f"Checkpoint saved to {ckpt_path}")
 
             # evaluate
             if step % steps_per_eval == steps_per_eval-1 and eval_func is not None:
@@ -172,14 +194,24 @@ class PriorDumpDataLoader(DataLoader):
 
 if __name__ == "__main__":
     device = get_default_device()
-    model = NanoTabPFNModel(
-        embedding_size=96,
-        num_attention_heads=4,
-        mlp_hidden_size=192,
-        num_layers=3,
-        num_outputs=2
-    )
+    model_config = {
+        "embedding_size": 96,
+        "num_attention_heads": 4,
+        "mlp_hidden_size": 192,
+        "num_layers": 3,
+        "num_outputs": 2,
+    }
+    model = NanoTabPFNModel(**model_config)
     prior = PriorDumpDataLoader("300k_150x5_2.h5", num_steps=2500, batch_size=32, device=device)
-    model, history = train(model, prior, lr=4e-3, steps_per_eval=25)
+    model, history = train(model, prior, lr=4e-3, steps_per_eval=25,
+                           checkpoint_dir="checkpoints", num_checkpoints=3,
+                           model_config=model_config)
     print("Final evaluation:")
     print(eval(NanoTabPFNClassifier(model, device)))
+
+    checkpoint = {
+        "model_state_dict": model.state_dict(),
+        "model_config": model_config,
+    }
+    torch.save(checkpoint, "nanotabpfn.pt")
+    print("Model saved to nanotabpfn.pt")
