@@ -40,7 +40,7 @@ def eval(classifier):
          prob = classifier.predict_proba(X_test)
          pred = prob.argmax(axis=1) # avoid a second forward pass by not calling predict
          if prob.shape[1]==2:
-             prob = prob[:,:1]
+             prob = prob[:,1]
          scores["roc_auc"] += float(roc_auc_score(y_test, prob, multi_class="ovr"))
          scores["acc"] += float(accuracy_score(y_test, pred))
          scores["balanced_acc"] += float(balanced_accuracy_score(y_test, pred))
