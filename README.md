@@ -24,7 +24,7 @@ To pretrain your own nanoTabPFN, you need to first download a prior data dump fr
 cd nanoTabPFN
 
 # download data dump
-curl -L -H "User-Agent: Mozilla/5.0" -H "Referer: https://figshare.com/" -o 300k_150x5_2.h5 "https://figshare.com/ndownloader/files/58932628?private_link=63fc1ada93e42e388e63"
+curl -L -o 300k_150x5_2.h5 "https://ndownloader.figshare.com/files/58932628?private_link=63fc1ada93e42e388e63"
 
 python train.py
 ```
