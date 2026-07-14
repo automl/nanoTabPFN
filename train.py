@@ -95,7 +95,7 @@ def train(model: NanoTabPFNModel, prior: DataLoader,
 
             loss = criterion(output, targets).mean()
             loss.backward()
-            total_loss = loss.cpu().detach().item()
+            total_loss = loss.item()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.)
             optimizer.step()
