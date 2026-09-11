@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.nn.modules.transformer import MultiheadAttention, Linear, LayerNorm
+from torch.nn.modules.transformer import Linear, LayerNorm
 
 class NanoTabPFNModel(nn.Module):
     def __init__(self, embedding_size: int, num_attention_heads: int, mlp_hidden_size: int, num_layers: int, num_outputs: int):
@@ -96,11 +96,18 @@ class TransformerEncoderLayer(nn.Module):
     Modified version of older version of https://github.com/pytorch/pytorch/blob/v2.6.0/torch/nn/modules/transformer.py#L630
     """
     def __init__(self, embedding_size: int, nhead: int, mlp_hidden_size: int,
-                 layer_norm_eps: float = 1e-5, batch_first: bool = True,
-                 device=None, dtype=None):
+                 layer_norm_eps: float = 1e-5, device=None, dtype=None):
         super().__init__()
-        self.self_attention_between_datapoints = MultiheadAttention(embedding_size, nhead, batch_first=batch_first, device=device, dtype=dtype)
-        self.self_attention_between_features = MultiheadAttention(embedding_size, nhead, batch_first=batch_first, device=device, dtype=dtype)
+        assert embedding_size % nhead == 0
+        self.nhead = nhead
+        self.q_datapoints = Linear(embedding_size, embedding_size, device=device, dtype=dtype)
+        self.k_datapoints = Linear(embedding_size, embedding_size, device=device, dtype=dtype)
+        self.v_datapoints = Linear(embedding_size, embedding_size, device=device, dtype=dtype)
+        self.o_datapoints = Linear(embedding_size, embedding_size, device=device, dtype=dtype)
+        self.q_features = Linear(embedding_size, embedding_size, device=device, dtype=dtype)
+        self.k_features = Linear(embedding_size, embedding_size, device=device, dtype=dtype)
+        self.v_features = Linear(embedding_size, embedding_size, device=device, dtype=dtype)
+        self.o_features = Linear(embedding_size, embedding_size, device=device, dtype=dtype)
 
         self.linear1 = Linear(embedding_size, mlp_hidden_size, device=device, dtype=dtype)
         self.linear2 = Linear(mlp_hidden_size, embedding_size, device=device, dtype=dtype)
@@ -124,17 +131,24 @@ class TransformerEncoderLayer(nn.Module):
         batch_size, rows_size, col_size, embedding_size = src.shape
         # attention between features
         src = src.reshape(batch_size*rows_size, col_size, embedding_size)
-        src = self.self_attention_between_features(src, src, src)[0]+src
+        q = self.q_features(src).reshape(batch_size*rows_size, col_size, self.nhead, -1).transpose(1, 2)
+        k = self.k_features(src).reshape(batch_size*rows_size, col_size, self.nhead, -1).transpose(1, 2)
+        v = self.v_features(src).reshape(batch_size*rows_size, col_size, self.nhead, -1).transpose(1, 2)
+        x = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(batch_size*rows_size, col_size, embedding_size)
+        src = self.o_features(x)+src
         src = src.reshape(batch_size, rows_size, col_size, embedding_size)
         src = self.norm1(src)
         # attention between datapoints
         src = src.transpose(1, 2)
         src = src.reshape(batch_size*col_size, rows_size, embedding_size)
+        src_train = src[:,:train_test_split_index]
+        q = self.q_datapoints(src).reshape(batch_size*col_size, rows_size, self.nhead, -1).transpose(1, 2)
+        k = self.k_datapoints(src_train).reshape(batch_size*col_size, train_test_split_index, self.nhead, -1).transpose(1, 2)
+        v = self.v_datapoints(src_train).reshape(batch_size*col_size, train_test_split_index, self.nhead, -1).transpose(1, 2)
         # training data attends to itself
-        src_left = self.self_attention_between_datapoints(src[:,:train_test_split_index], src[:,:train_test_split_index], src[:,:train_test_split_index])[0]
         # test data attends to the training data
-        src_right = self.self_attention_between_datapoints(src[:,train_test_split_index:], src[:,:train_test_split_index], src[:,:train_test_split_index])[0]
-        src = torch.cat([src_left, src_right], dim=1)+src
+        x = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(batch_size*col_size, rows_size, embedding_size)
+        src = self.o_datapoints(x)+src
         src = src.reshape(batch_size, col_size, rows_size, embedding_size)
         src = src.transpose(2, 1)
         src = self.norm2(src)
