@@ -124,16 +124,16 @@ class TransformerEncoderLayer(nn.Module):
         batch_size, rows_size, col_size, embedding_size = src.shape
         # attention between features
         src = src.reshape(batch_size*rows_size, col_size, embedding_size)
-        src = self.self_attention_between_features(src, src, src)[0]+src
+        src = self.self_attention_between_features(src, src, src, need_weights=False)[0]+src
         src = src.reshape(batch_size, rows_size, col_size, embedding_size)
         src = self.norm1(src)
         # attention between datapoints
         src = src.transpose(1, 2)
         src = src.reshape(batch_size*col_size, rows_size, embedding_size)
         # training data attends to itself
-        src_left = self.self_attention_between_datapoints(src[:,:train_test_split_index], src[:,:train_test_split_index], src[:,:train_test_split_index])[0]
+        src_left = self.self_attention_between_datapoints(src[:,:train_test_split_index], src[:,:train_test_split_index], src[:,:train_test_split_index], need_weights=False)[0]
         # test data attends to the training data
-        src_right = self.self_attention_between_datapoints(src[:,train_test_split_index:], src[:,:train_test_split_index], src[:,:train_test_split_index])[0]
+        src_right = self.self_attention_between_datapoints(src[:,train_test_split_index:], src[:,:train_test_split_index], src[:,:train_test_split_index], need_weights=False)[0]
         src = torch.cat([src_left, src_right], dim=1)+src
         src = src.reshape(batch_size, col_size, rows_size, embedding_size)
         src = src.transpose(2, 1)
